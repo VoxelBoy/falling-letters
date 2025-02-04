@@ -46,87 +46,81 @@ function createLetter(x, y) {
     // Create a temporary canvas to generate letter path
     const tempCanvas = document.createElement('canvas');
     const tempCtx = tempCanvas.getContext('2d');
-    tempCanvas.width = 60;
-    tempCanvas.height = 60;
+    tempCanvas.width = 100;  // Increased canvas size for better detail
+    tempCanvas.height = 100;
     
-    // Draw letter
-    tempCtx.font = 'bold 48px Arial';
+    // Draw letter with higher resolution
+    tempCtx.font = 'bold 80px Arial';
     tempCtx.fillStyle = 'black';
     tempCtx.textAlign = 'center';
     tempCtx.textBaseline = 'middle';
     tempCtx.fillText(randomLetter, tempCanvas.width / 2, tempCanvas.height / 2);
     
-    // Get letter vertices
+    // Get letter vertices with more detail
     const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
     const points = [];
+    const step = 2; // Sample every 2 pixels for better performance while maintaining detail
     
-    for (let i = 0; i < imageData.data.length; i += 4) {
-        if (imageData.data[i + 3] > 0) {
-            const px = (i / 4) % tempCanvas.width;
-            const py = Math.floor((i / 4) / tempCanvas.width);
-            points.push({ x: px, y: py });
+    for (let y = 0; y < tempCanvas.height; y += step) {
+        for (let x = 0; x < tempCanvas.width; x += step) {
+            const index = (y * tempCanvas.width + x) * 4;
+            if (imageData.data[index + 3] > 128) { // Alpha threshold
+                // Check if this is an edge pixel by looking at neighbors
+                const isEdge = (
+                    x === 0 || x === tempCanvas.width - 1 || y === 0 || y === tempCanvas.height - 1 ||
+                    imageData.data[((y - 1) * tempCanvas.width + x) * 4 + 3] <= 128 ||
+                    imageData.data[((y + 1) * tempCanvas.width + x) * 4 + 3] <= 128 ||
+                    imageData.data[(y * tempCanvas.width + x - 1) * 4 + 3] <= 128 ||
+                    imageData.data[(y * tempCanvas.width + x + 1) * 4 + 3] <= 128
+                );
+                
+                if (isEdge) {
+                    points.push([x - tempCanvas.width / 2, y - tempCanvas.height / 2]);
+                }
+            }
         }
     }
     
-    // Create hull from points
-    const hull = new ConvexHull(points);
-    const vertices = hull.getHull().map(point => Vector.create(point.x - tempCanvas.width / 2, point.y - tempCanvas.height / 2));
+    // Ensure we have enough points for decomposition
+    if (points.length < 3) {
+        console.warn('Not enough points for letter:', randomLetter);
+        return;
+    }
     
-    // Create physics body
-    const letterBody = Bodies.fromVertices(x, y, [vertices], {
-        render: {
-            fillStyle: getRandomColor(),
-            strokeStyle: '#ffffff',
-            lineWidth: 1
-        },
-        restitution: 0.4,
-        friction: 0.1,
-        density: 0.001
-    });
-    
-    Composite.add(world, letterBody);
+    try {
+        // Decompose the concave shape into convex parts
+        const decomposed = decomp.quickDecomp(points);
+        
+        // Create a compound body from the decomposed parts
+        const parts = decomposed.map(vertices => {
+            return Bodies.fromVertices(0, 0, [vertices.map(vertex => ({ x: vertex[0], y: vertex[1] }))], {
+                render: {
+                    fillStyle: getRandomColor(),
+                    strokeStyle: '#ffffff',
+                    lineWidth: 1
+                }
+            });
+        });
+        
+        // Create compound body
+        const letterBody = Body.create({
+            parts: parts,
+            position: { x, y },
+            restitution: 0.4,
+            friction: 0.1,
+            density: 0.001
+        });
+        
+        Composite.add(world, letterBody);
+    } catch (error) {
+        console.error('Error creating letter:', error);
+    }
 }
 
 // Helper function to generate random colors
 function getRandomColor() {
     const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD', '#D4A5A5', '#9B59B6', '#3498DB'];
     return colors[Math.floor(Math.random() * colors.length)];
-}
-
-// ConvexHull algorithm (Graham Scan)
-class ConvexHull {
-    constructor(points) {
-        this.points = points;
-    }
-    
-    getHull() {
-        const points = [...this.points];
-        points.sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
-        
-        const lower = [];
-        for (let i = 0; i < points.length; i++) {
-            while (lower.length >= 2 && this.cross(lower[lower.length - 2], lower[lower.length - 1], points[i]) <= 0) {
-                lower.pop();
-            }
-            lower.push(points[i]);
-        }
-        
-        const upper = [];
-        for (let i = points.length - 1; i >= 0; i--) {
-            while (upper.length >= 2 && this.cross(upper[upper.length - 2], upper[upper.length - 1], points[i]) <= 0) {
-                upper.pop();
-            }
-            upper.push(points[i]);
-        }
-        
-        upper.pop();
-        lower.pop();
-        return lower.concat(upper);
-    }
-    
-    cross(o, a, b) {
-        return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-    }
 }
 
 // Handle window resize
